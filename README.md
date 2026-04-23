@@ -7,6 +7,7 @@ Google Chrome dropped support for Manifest V2 extensions, which broke the origin
 ## Features
 
 - Full autofill support via native messaging to the 1Password 7 desktop app
+- **Go & Fill** for two-step login flows — fills username, submits, then automatically fills the password when it appears (works on sites like Google, Microsoft, etc.)
 - Inline 1Password icon in password and login fields (click to fill)
 - Toolbar button, keyboard shortcut (Cmd+\ / Ctrl+\), and right-click context menu
 - Works with vaults stored locally or synced via Dropbox/iCloud
