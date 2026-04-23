@@ -128,59 +128,6 @@ chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
     return true;
   }
 
-  if (message.command === 'get-cached-password') {
-    var tabId = sender.tab.id;
-    chrome.storage.local.get(['fill_' + tabId, 'fill_ts_' + tabId], function(result) {
-      var raw = result['fill_' + tabId];
-      var ts = result['fill_ts_' + tabId];
-
-      // Only use cache if it's less than 5 minutes old
-      if (!raw || !ts || (Date.now() - ts > 300000)) {
-        sendResponse({ values: null });
-        return;
-      }
-
-      try {
-        var data = JSON.parse(raw);
-        var msg = data.message;
-        if (!msg || !msg.script) {
-          sendResponse({ values: null });
-          return;
-        }
-
-        // Recursively extract all strings from the fill script
-        var allStrings = [];
-        function extract(obj) {
-          if (!obj) return;
-          if (typeof obj === 'string' && obj.length > 0 && obj.length < 500) {
-            allStrings.push(obj);
-          } else if (Array.isArray(obj)) {
-            for (var i = 0; i < obj.length; i++) extract(obj[i]);
-          } else if (typeof obj === 'object') {
-            var keys = Object.keys(obj);
-            for (var j = 0; j < keys.length; j++) extract(obj[keys[j]]);
-          }
-        }
-        extract(msg.script);
-
-        // Filter out operation names
-        var ops = ['fill_by_opid','fill_by_query','click_on_opid','click_on_query',
-                   'focus_by_opid','touch_all_fields','simple_set_value_by_query',
-                   'delay','fopid','fq','copid','cq','focusopid','mb'];
-        var values = allStrings.filter(function(s) {
-          return ops.indexOf(s) === -1 && s.indexOf('__') !== 0 &&
-                 s !== 'true' && s !== 'false' && s !== 'yes' && s !== 'no';
-        });
-
-        console.log('[1P-shim] Extracted ' + values.length + ' values from cached script');
-        sendResponse({ values: values.length > 0 ? values : null });
-      } catch(e) {
-        console.log('[1P-shim] Parse error:', e);
-        sendResponse({ values: null });
-      }
-    });
-    return true;
-  }
 });
 
 // Import the SJCL crypto library (used by the 1Password background logic)
