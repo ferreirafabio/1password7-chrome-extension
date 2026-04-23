@@ -143,67 +143,63 @@
   }
 
   // --- Auto-fill for two-step logins ---
-  // Cache fill values from 1Password fill scripts. When a password field appears
-  // dynamically after username was filled, auto-fill it without opening the popup.
-  var cachedFillValues = [];
+  // When a password field appears dynamically after 1Password filled the username,
+  // request the cached password from the background and fill it directly.
   var autoFillTimer = null;
   var autoFillAttempted = false;
 
-  // Listen for fill scripts from the background. Both inline-icon.js and injected.min.js
-  // receive these messages. We extract and cache all fill values.
-  chrome.runtime.onMessage.addListener(function(message) {
-    if (message && (message.name === 'executeFillScript' || message.name === 'legacy_executeFillScript')) {
-      var msg = message.message;
-      if (msg && msg.script) {
-        cachedFillValues = [];
-        autoFillAttempted = false;
-        for (var i = 0; i < msg.script.length; i++) {
-          var entry = msg.script[i];
-          var op, value;
-          if (Array.isArray(entry)) {
-            op = entry[0];
-            value = entry.length >= 3 ? entry[2] : null;
-          } else if (entry && typeof entry === 'object') {
-            op = entry.action || entry.operation || '';
-            value = (entry.values && entry.values[1]) || (entry.parameters && entry.parameters[1]) || null;
-          }
-          if (op && typeof op === 'string' && op.indexOf('fill') === 0 && value && typeof value === 'string') {
-            cachedFillValues.push(value);
-          }
-        }
-      }
-    }
-  });
+  function fillField(field, value) {
+    // Use the same fill technique as 1Password's own fill script
+    var nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype, 'value').set;
+    nativeInputValueSetter.call(field, value);
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    field.dispatchEvent(new Event('change', { bubbles: true }));
+    // Add 1Password fill animation for visual feedback
+    field.classList.add('com-agilebits-onepassword-extension-animated-fill');
+    setTimeout(function() {
+      field.classList.remove('com-agilebits-onepassword-extension-animated-fill');
+    }, 300);
+  }
 
   function autoFillPasswordField(field) {
-    if (autoFillAttempted || cachedFillValues.length === 0) return false;
+    if (autoFillAttempted) return;
+    autoFillAttempted = true;
 
-    // Collect values already visible in text/email inputs (i.e., the username)
-    var usedValues = [];
-    var inputs = document.querySelectorAll('input[type="text"],input[type="email"],input[type="tel"]');
-    for (var i = 0; i < inputs.length; i++) {
-      if (inputs[i].value) usedValues.push(inputs[i].value);
-    }
+    // Ask the background for the cached password value
+    chrome.runtime.sendMessage(
+      { command: 'get-cached-password', params: { url: window.location.href } },
+      function(response) {
+        if (chrome.runtime.lastError) return;
+        if (!response) return;
 
-    // Find a cached value that wasn't used for username — that's the password
-    for (var j = 0; j < cachedFillValues.length; j++) {
-      if (usedValues.indexOf(cachedFillValues[j]) === -1) {
-        autoFillAttempted = true;
-        field.focus();
-        field.value = cachedFillValues[j];
-        field.dispatchEvent(new Event('input', { bubbles: true }));
-        field.dispatchEvent(new Event('change', { bubbles: true }));
-        field.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true }));
-        field.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
-        // Add 1Password fill animation for visual feedback
-        field.classList.add('com-agilebits-onepassword-extension-animated-fill');
-        setTimeout(function() {
-          field.classList.remove('com-agilebits-onepassword-extension-animated-fill');
-        }, 300);
-        return true;
+        if (response.password) {
+          // Direct password match from field properties
+          fillField(field, response.password);
+        } else if (response.values && response.values.length > 0) {
+          // Heuristic: find the value not already in any visible input
+          var usedValues = [];
+          var inputs = document.querySelectorAll('input[type="text"],input[type="email"],input[type="tel"]');
+          for (var i = 0; i < inputs.length; i++) {
+            if (inputs[i].value) usedValues.push(inputs[i].value);
+          }
+          for (var j = 0; j < response.values.length; j++) {
+            if (usedValues.indexOf(response.values[j]) === -1) {
+              fillField(field, response.values[j]);
+              return;
+            }
+          }
+          // If all values matched visible fields, use the last one (likely password)
+          if (response.values.length > 1) {
+            fillField(field, response.values[response.values.length - 1]);
+          }
+        } else {
+          // No cached password — fall back to opening popup
+          autoFillAttempted = false;
+          chrome.runtime.sendMessage({ command: 'inline-icon-clicked', params: { url: window.location.href } });
+        }
       }
-    }
-    return false;
+    );
   }
 
   // Watch for dynamically added fields (SPAs, lazy-loaded forms)

@@ -108,13 +108,94 @@ if (typeof chrome !== 'undefined' && chrome.tabs) {
   });
 }
 
-// Handle inline icon clicks BEFORE global.min.js loads its own onMessage listener.
+// Handle inline icon clicks and password extraction BEFORE global.min.js loads its listener.
 chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
-  if (message && message.command === 'inline-icon-clicked' && sender.tab) {
+  if (!message || !sender.tab) return;
+
+  if (message.command === 'inline-icon-clicked') {
     if (self._opToolbarHandler) {
       self._opToolbarHandler(sender.tab);
     }
     sendResponse({ success: true });
+    return true;
+  }
+
+  if (message.command === 'get-cached-password') {
+    // Content script is asking for the cached password value for this tab.
+    var tabId = sender.tab.id;
+    var cached = self._lastFillScript[tabId];
+    var password = null;
+
+    if (cached && cached.message) {
+      var msg = cached.message;
+      var script = msg.script;
+      var props = msg.properties;
+
+      // Try to find the password value from the fill script.
+      // Method 1: Use properties to identify password fields, then get their values from script
+      if (props && script) {
+        // props contains field metadata keyed by opid
+        var passwordOpids = [];
+        var keys = Object.keys(props);
+        for (var i = 0; i < keys.length; i++) {
+          var field = props[keys[i]];
+          if (field && (field.type === 'password' ||
+              (field.htmlInputType && field.htmlInputType === 'password') ||
+              (field.designationType && field.designationType === 'password'))) {
+            passwordOpids.push(keys[i]);
+          }
+        }
+
+        // Now find the value for these opids in the script
+        for (var j = 0; j < script.length; j++) {
+          var entry = script[j];
+          var op, target, value;
+          if (Array.isArray(entry)) {
+            op = entry[0]; target = entry[1]; value = entry[2];
+          } else if (entry && typeof entry === 'object') {
+            op = entry.action || entry.operation || '';
+            var vals = entry.values || entry.parameters || [];
+            target = vals[0]; value = vals[1];
+          }
+          if (value && typeof value === 'string' && op && typeof op === 'string' && op.indexOf('fill') === 0) {
+            if (passwordOpids.length > 0 && passwordOpids.indexOf(target) !== -1) {
+              password = value;
+              break;
+            }
+          }
+        }
+      }
+
+      // Method 2: If no password found via properties, use heuristic —
+      // collect all fill values and pick the one not matching any visible input
+      if (!password && script) {
+        var allValues = [];
+        for (var k = 0; k < script.length; k++) {
+          var e = script[k];
+          var v;
+          if (Array.isArray(e)) {
+            v = e.length >= 3 ? e[2] : null;
+            if (v && typeof v === 'string' && e[0] && typeof e[0] === 'string' && e[0].indexOf('fill') === 0) {
+              allValues.push(v);
+            }
+          } else if (e && typeof e === 'object') {
+            var vs = e.values || e.parameters || [];
+            v = vs[1];
+            var o = e.action || e.operation || '';
+            if (v && typeof v === 'string' && o.indexOf('fill') === 0) {
+              allValues.push(v);
+            }
+          }
+        }
+        // Send all values — content script will determine which is the password
+        if (allValues.length > 0) {
+          sendResponse({ values: allValues });
+          return true;
+        }
+      }
+    }
+
+    sendResponse({ password: password, values: null });
     return true;
   }
 });
