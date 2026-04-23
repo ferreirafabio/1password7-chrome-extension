@@ -164,107 +164,21 @@
   }
 
   // --- Auto-fill for two-step logins ---
-  // When a password field appears dynamically after 1Password filled the username,
-  // request the cached password from the background and fill it directly.
+  // When a password field appears dynamically after the username was filled,
+  // the background has set up a Go & Fill operation via OnePassword.trackGoAndFillOperationForTabReference.
+  // We just need to trigger the content script's checkForGoAndFill scan, which is done by
+  // the existing injected.min.js code. We signal it by briefly waiting (the background's
+  // Go & Fill tracking will handle the auto-fill via the existing 1Password flow).
   var autoFillTimer = null;
   var autoFillAttempted = false;
-
-  function fillField(field, value) {
-    // Use the same fill technique as 1Password's own fill script
-    var nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-      window.HTMLInputElement.prototype, 'value').set;
-    nativeInputValueSetter.call(field, value);
-    field.dispatchEvent(new Event('input', { bubbles: true }));
-    field.dispatchEvent(new Event('change', { bubbles: true }));
-    // Add 1Password fill animation for visual feedback
-    field.classList.add('com-agilebits-onepassword-extension-animated-fill');
-    setTimeout(function() {
-      field.classList.remove('com-agilebits-onepassword-extension-animated-fill');
-    }, 300);
-  }
 
   function autoFillPasswordField(field) {
     if (autoFillAttempted) return;
     autoFillAttempted = true;
-
-    // Read cached fill script directly from chrome.storage.local.
-    // We do NOT use message passing because global.min.js intercepts all messages
-    // with a 'command' field and responds with {} before our handler can respond.
-    chrome.storage.local.get(null, function(all) {
-      // Find the most recent fill script (within 5 minutes)
-      var bestKey = null;
-      var bestTs = 0;
-      var keys = Object.keys(all);
-      for (var i = 0; i < keys.length; i++) {
-        if (keys[i].indexOf('fill_ts_') === 0) {
-          var ts = all[keys[i]];
-          if (ts > bestTs && (Date.now() - ts < 300000)) {
-            bestTs = ts;
-            bestKey = 'fill_' + keys[i].substring(8); // fill_ts_XXX -> fill_XXX
-          }
-        }
-      }
-      if (bestKey && all[bestKey]) {
-        tryExtractAndFill(all[bestKey], field);
-      } else {
-        fallbackPopup();
-      }
-    });
-
-    function tryExtractAndFill(raw, pwField) {
-      try {
-        var data = JSON.parse(raw);
-        var script = data.message && data.message.script;
-        if (!script) { fallbackPopup(); return; }
-
-        // Recursively extract all strings from the fill script
-        var allStrings = [];
-        function extract(obj) {
-          if (!obj) return;
-          if (typeof obj === 'string' && obj.length > 0 && obj.length < 500) allStrings.push(obj);
-          else if (Array.isArray(obj)) { for (var i = 0; i < obj.length; i++) extract(obj[i]); }
-          else if (typeof obj === 'object') { var k = Object.keys(obj); for (var j = 0; j < k.length; j++) extract(obj[k[j]]); }
-        }
-        extract(script);
-
-        // Filter out operation names
-        var ops = ['fill_by_opid','fill_by_query','click_on_opid','click_on_query',
-                   'focus_by_opid','touch_all_fields','simple_set_value_by_query',
-                   'delay','fopid','fq','copid','cq','focusopid','mb'];
-        var values = allStrings.filter(function(s) {
-          return ops.indexOf(s) === -1 && s.indexOf('__') !== 0 &&
-                 s !== 'true' && s !== 'false' && s !== 'yes' && s !== 'no';
-        });
-
-        if (values.length === 0) { fallbackPopup(); return; }
-
-        // Find value not already in a visible text input (that's the password)
-        var usedValues = [];
-        var inputs = document.querySelectorAll('input[type="text"],input[type="email"],input[type="tel"]');
-        for (var i = 0; i < inputs.length; i++) {
-          if (inputs[i].value) usedValues.push(inputs[i].value);
-        }
-        for (var j = 0; j < values.length; j++) {
-          if (usedValues.indexOf(values[j]) === -1) {
-            fillField(pwField, values[j]);
-            return;
-          }
-        }
-        // All values match — use the last one
-        if (values.length > 1) {
-          fillField(pwField, values[values.length - 1]);
-        } else {
-          fallbackPopup();
-        }
-      } catch(e) {
-        fallbackPopup();
-      }
-    }
-
-    function fallbackPopup() {
-      autoFillAttempted = false;
-      chrome.runtime.sendMessage({ command: 'inline-icon-clicked', params: { url: window.location.href } });
-    }
+    // The Go & Fill mechanism in 1Password works via the toolbar button handler.
+    // When Go & Fill is tracked for a tab, clicking the toolbar button auto-fills
+    // without showing the popup. Trigger it.
+    chrome.runtime.sendMessage({ command: 'inline-icon-clicked', params: { url: window.location.href } });
   }
 
   // Watch for dynamically added fields (SPAs, lazy-loaded forms)
@@ -293,7 +207,7 @@
     }
 
     // If a new password field appeared dynamically, try auto-fill after a short delay
-    if (hasNewPasswordField && cachedFillValues.length > 0 && !autoFillAttempted) {
+    if (hasNewPasswordField && !autoFillAttempted) {
       clearTimeout(autoFillTimer);
       autoFillTimer = setTimeout(function() {
         var pwFields = document.querySelectorAll('input[type="password"]');

@@ -135,3 +135,46 @@ importScripts('ext/sjcl.js');
 
 // Import the original 1Password background logic
 importScripts('global.min.js');
+
+// After global.min.js loads, hook into the fill process to enable auto Go & Fill.
+// When the user selects a login from the popup, 1Password fills whatever fields exist.
+// If the password field doesn't exist yet (two-step login), we set up a Go & Fill
+// operation so when the password page loads, 1Password auto-fills without a popup.
+(function() {
+  var OP = self.OnePassword;
+  if (!OP) return;
+
+  // Hook fillItem to capture the login data (itemUUID, vaultUUID)
+  // and set up a Go & Fill operation for the current tab.
+  var origFillItem = OP.fillItem;
+  if (origFillItem) {
+    OP.fillItem = function(action, login, options) {
+      // Store the login data for Go & Fill tracking
+      if (action === 'fillLogin' && login) {
+        // Get the active tab and set up Go & Fill tracking
+        chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
+          if (tabs && tabs[0]) {
+            var tabRef = tabs[0].id;
+            var itemUUID = login.uuid || login.itemUUID;
+            var vaultUUID = login.vaultUUID || '';
+            var url = tabs[0].url || '';
+            var nakedDomain = OP.URLTools ? OP.URLTools.L(url) : null;
+
+            if (itemUUID && OP.trackGoAndFillOperationForTabReference) {
+              OP.trackGoAndFillOperationForTabReference({
+                itemUUID: itemUUID,
+                vaultUUID: vaultUUID,
+                url: url,
+                nakedDomains: nakedDomain ? [nakedDomain] : null,
+                uuid: itemUUID,
+                context: null
+              }, tabRef);
+              console.log('[1P-shim] Set up Go & Fill for item ' + itemUUID + ' on tab ' + tabRef);
+            }
+          }
+        });
+      }
+      return origFillItem.apply(this, arguments);
+    };
+  }
+})();
