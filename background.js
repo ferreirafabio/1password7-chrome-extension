@@ -144,37 +144,50 @@ importScripts('global.min.js');
   var OP = self.OnePassword;
   if (!OP) return;
 
-  // Hook fillItem to capture the login data (itemUUID, vaultUUID)
-  // and set up a Go & Fill operation for the current tab.
+  // Find the fillItem function and override ALL aliases (internal code uses r.Oa,
+  // not r.fillItem, so we must override every property pointing to the same function).
   var origFillItem = OP.fillItem;
-  if (origFillItem) {
-    OP.fillItem = function(action, login, options) {
-      // Store the login data for Go & Fill tracking
-      if (action === 'fillLogin' && login) {
-        // Get the active tab and set up Go & Fill tracking
-        chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
-          if (tabs && tabs[0]) {
-            var tabRef = tabs[0].id;
-            var itemUUID = login.uuid || login.itemUUID;
-            var vaultUUID = login.vaultUUID || '';
-            var url = tabs[0].url || '';
-            var nakedDomain = OP.URLTools ? OP.URLTools.L(url) : null;
+  if (!origFillItem) return;
 
-            if (itemUUID && OP.trackGoAndFillOperationForTabReference) {
-              OP.trackGoAndFillOperationForTabReference({
-                itemUUID: itemUUID,
-                vaultUUID: vaultUUID,
-                url: url,
-                nakedDomains: nakedDomain ? [nakedDomain] : null,
-                uuid: itemUUID,
-                context: null
-              }, tabRef);
-              console.log('[1P-shim] Set up Go & Fill for item ' + itemUUID + ' on tab ' + tabRef);
-            }
+  var hookedFillItem = function(action, login, options) {
+    if (action === 'fillLogin' && login) {
+      chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
+        if (tabs && tabs[0] && OP.trackGoAndFillOperationForTabReference) {
+          var tabRef = tabs[0].id;
+          var itemUUID = login.uuid || login.itemUUID;
+          var vaultUUID = login.vaultUUID || '';
+          var url = tabs[0].url || '';
+          var nakedDomains = null;
+          if (OP.URLTools && OP.URLTools.L) {
+            var nd = OP.URLTools.L(url);
+            if (nd) nakedDomains = [nd];
           }
-        });
-      }
-      return origFillItem.apply(this, arguments);
-    };
+
+          if (itemUUID) {
+            OP.trackGoAndFillOperationForTabReference({
+              itemUUID: itemUUID,
+              vaultUUID: vaultUUID,
+              url: url,
+              nakedDomains: nakedDomains,
+              uuid: itemUUID,
+              context: null,
+              scheduledAt: (new Date()).getTime()
+            }, tabRef);
+            console.log('[1P-shim] Go & Fill tracked: item=' + itemUUID + ' tab=' + tabRef);
+          }
+        }
+      });
+    }
+    return origFillItem.apply(this, arguments);
+  };
+
+  // Override ALL properties that point to the original fillItem function.
+  // This ensures internal calls (this.Oa) use our hooked version too.
+  var keys = Object.keys(OP);
+  for (var i = 0; i < keys.length; i++) {
+    if (OP[keys[i]] === origFillItem) {
+      OP[keys[i]] = hookedFillItem;
+    }
   }
+  console.log('[1P-shim] fillItem hook installed');
 })();
