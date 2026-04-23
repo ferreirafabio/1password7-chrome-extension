@@ -60,7 +60,7 @@
       e.stopPropagation();
       e.stopImmediatePropagation();
       // Tell the background to trigger the same action as clicking the toolbar button
-      chrome.runtime.sendMessage({ command: 'inline-icon-clicked', params: { url: window.location.href } });
+      chrome.runtime.sendMessage({ action: 'op-inline-icon-clicked', params: { url: window.location.href } });
       return false;
     }, true);
 
@@ -176,7 +176,7 @@
     if (autoFillAttempted) return;
     autoFillAttempted = true;
     // Auto-open the 1Password popup when a password field appears
-    chrome.runtime.sendMessage({ command: 'inline-icon-clicked', params: { url: window.location.href } });
+    chrome.runtime.sendMessage({ action: 'op-inline-icon-clicked', params: { url: window.location.href } });
   }
 
   // Watch for dynamically added fields (SPAs, lazy-loaded forms)

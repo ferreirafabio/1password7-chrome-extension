@@ -95,8 +95,10 @@ if (typeof chrome !== 'undefined' && chrome.tabs) {
 }
 
 // Handle inline icon clicks BEFORE global.min.js loads its own onMessage listener.
+// Use 'action' field instead of 'command' — global.min.js intercepts all messages
+// with a 'command' field via Ya() which interferes with our handler.
 chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
-  if (message && message.command === 'inline-icon-clicked' && sender.tab) {
+  if (message && message.action === 'op-inline-icon-clicked' && sender.tab) {
     if (self._opToolbarHandler) {
       self._opToolbarHandler(sender.tab);
     }
