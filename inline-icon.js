@@ -142,20 +142,82 @@
     scanForFields(document);
   }
 
+  // Track whether 1Password has filled a field on this page (username step).
+  // When a password field appears dynamically after that, auto-trigger fill.
+  var hasFilled = false;
+  var autoFillTimer = null;
+
+  // Listen for 1Password fill events (the extension adds a class during fill animation)
+  var fillObserver = new MutationObserver(function(mutations) {
+    for (var i = 0; i < mutations.length; i++) {
+      var target = mutations[i].target;
+      if (target.tagName === 'INPUT' && target.classList &&
+          target.classList.contains('com-agilebits-onepassword-extension-animated-fill')) {
+        hasFilled = true;
+      }
+    }
+  });
+  fillObserver.observe(document.documentElement, {
+    attributes: true, attributeFilter: ['class'], subtree: true
+  });
+
+  // Also detect fills by value changes on inputs after a 1Password action
+  document.addEventListener('change', function(e) {
+    if (e.target && e.target.tagName === 'INPUT' &&
+        e.target.getAttribute('data-op-inline-icon')) {
+      hasFilled = true;
+    }
+  }, true);
+
+  function checkForNewPasswordField(root) {
+    if (!root || !root.querySelectorAll) return;
+    var pwFields = root.querySelectorAll('input[type="password"]');
+    for (var i = 0; i < pwFields.length; i++) {
+      var field = pwFields[i];
+      if (!field.value && !field.disabled && !field.readOnly &&
+          field.getBoundingClientRect().height > 0) {
+        // New empty visible password field appeared — trigger 1Password fill
+        chrome.runtime.sendMessage({
+          command: 'inline-icon-clicked',
+          params: { url: window.location.href }
+        });
+        return;
+      }
+    }
+  }
+
   // Watch for dynamically added fields (SPAs, lazy-loaded forms)
   var observer = new MutationObserver(function(mutations) {
+    var hasNewPasswordField = false;
     for (var i = 0; i < mutations.length; i++) {
       var added = mutations[i].addedNodes;
       for (var j = 0; j < added.length; j++) {
         var node = added[j];
         if (node.nodeType === 1) {
-          if (node.tagName === 'INPUT' && isLoginField(node)) {
-            (function(n) { setTimeout(function() { createIcon(n); }, 150); })(node);
+          if (node.tagName === 'INPUT') {
+            if (isLoginField(node)) {
+              (function(n) { setTimeout(function() { createIcon(n); }, 150); })(node);
+            }
+            if ((node.type || '').toLowerCase() === 'password') {
+              hasNewPasswordField = true;
+            }
           } else {
             scanForFields(node);
+            if (node.querySelector && node.querySelector('input[type="password"]')) {
+              hasNewPasswordField = true;
+            }
           }
         }
       }
+    }
+
+    // If a new password field appeared dynamically, auto-trigger fill after a short delay
+    // (debounced to avoid multiple triggers)
+    if (hasNewPasswordField) {
+      clearTimeout(autoFillTimer);
+      autoFillTimer = setTimeout(function() {
+        checkForNewPasswordField(document);
+      }, 500);
     }
   });
 
