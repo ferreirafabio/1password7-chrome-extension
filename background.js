@@ -76,50 +76,23 @@ if (typeof chrome !== 'undefined' && chrome.contextMenus) {
   });
 }
 
-// Cache fill script values per tab and suppress "Receiving end does not exist" errors.
-// Extract ALL string values from fill scripts so we can auto-fill password fields
-// that appear dynamically in two-step login flows.
-self._lastFillScript = {};
+// Suppress "Receiving end does not exist" errors and cache fill scripts.
+// Store raw fill script in chrome.storage.local so content scripts can read it
+// directly — survives service worker restarts and avoids message passing issues.
 if (typeof chrome !== 'undefined' && chrome.tabs) {
-  // Recursively extract all string values from any data structure
-  function extractStrings(obj, results) {
-    if (!obj) return;
-    if (typeof obj === 'string' && obj.length > 0 && obj.length < 500) {
-      results.push(obj);
-    } else if (Array.isArray(obj)) {
-      for (var i = 0; i < obj.length; i++) extractStrings(obj[i], results);
-    } else if (typeof obj === 'object') {
-      var keys = Object.keys(obj);
-      for (var j = 0; j < keys.length; j++) extractStrings(obj[keys[j]], results);
-    }
-  }
-
   var origTabsSendMessage = chrome.tabs.sendMessage.bind(chrome.tabs);
   chrome.tabs.sendMessage = function(tabId, message, optionsOrCallback, callback) {
-    // Cache fill script values per tab
+    // Cache entire fill script message in storage for content script to read
     if (message && (message.name === 'executeFillScript' || message.name === 'legacy_executeFillScript')) {
-      var msg = message.message;
-      if (msg && msg.script) {
-        // Extract all string values from the script entries
-        var allValues = [];
-        extractStrings(msg.script, allValues);
-        // Filter out operation names and common non-value strings
-        var ops = ['fill_by_opid','fill_by_query','click_on_opid','click_on_query',
-                   'focus_by_opid','touch_all_fields','simple_set_value_by_query',
-                   'delay','fopid','fq','copid','cq','focusopid','mb',
-                   'fill_by_opid_and_submit'];
-        var filtered = [];
-        for (var i = 0; i < allValues.length; i++) {
-          var v = allValues[i];
-          if (ops.indexOf(v) === -1 && v.indexOf('__') !== 0 && v !== 'true' && v !== 'false') {
-            filtered.push(v);
-          }
-        }
-        self._lastFillScript[tabId] = filtered;
-        // Persist across service worker restarts
-        var storageObj = {};
-        storageObj['fill_' + tabId] = filtered;
-        chrome.storage.session.set(storageObj);
+      try {
+        var scriptData = JSON.stringify(message);
+        var obj = {};
+        obj['fill_' + tabId] = scriptData;
+        obj['fill_ts_' + tabId] = Date.now();
+        chrome.storage.local.set(obj);
+        console.log('[1P-shim] Cached fill script for tab ' + tabId + ', size: ' + scriptData.length);
+      } catch(e) {
+        console.log('[1P-shim] Failed to cache fill script:', e);
       }
     }
 
@@ -139,8 +112,7 @@ if (typeof chrome !== 'undefined' && chrome.tabs) {
 
   // Clean up cache when tabs are closed
   chrome.tabs.onRemoved.addListener(function(tabId) {
-    delete self._lastFillScript[tabId];
-    chrome.storage.session.remove('fill_' + tabId);
+    chrome.storage.local.remove(['fill_' + tabId, 'fill_ts_' + tabId]);
   });
 }
 
@@ -157,25 +129,57 @@ chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
   }
 
   if (message.command === 'get-cached-password') {
-    // Content script is asking for cached fill values for this tab.
     var tabId = sender.tab.id;
-    var cached = self._lastFillScript[tabId];
+    chrome.storage.local.get(['fill_' + tabId, 'fill_ts_' + tabId], function(result) {
+      var raw = result['fill_' + tabId];
+      var ts = result['fill_ts_' + tabId];
 
-    if (cached && cached.length > 0) {
-      sendResponse({ values: cached });
-      return true;
-    }
+      // Only use cache if it's less than 5 minutes old
+      if (!raw || !ts || (Date.now() - ts > 300000)) {
+        sendResponse({ values: null });
+        return;
+      }
 
-    // Service worker may have restarted — check persistent storage
-    chrome.storage.session.get('fill_' + tabId, function(result) {
-      var stored = result['fill_' + tabId];
-      if (stored && stored.length > 0) {
-        sendResponse({ values: stored });
-      } else {
+      try {
+        var data = JSON.parse(raw);
+        var msg = data.message;
+        if (!msg || !msg.script) {
+          sendResponse({ values: null });
+          return;
+        }
+
+        // Recursively extract all strings from the fill script
+        var allStrings = [];
+        function extract(obj) {
+          if (!obj) return;
+          if (typeof obj === 'string' && obj.length > 0 && obj.length < 500) {
+            allStrings.push(obj);
+          } else if (Array.isArray(obj)) {
+            for (var i = 0; i < obj.length; i++) extract(obj[i]);
+          } else if (typeof obj === 'object') {
+            var keys = Object.keys(obj);
+            for (var j = 0; j < keys.length; j++) extract(obj[keys[j]]);
+          }
+        }
+        extract(msg.script);
+
+        // Filter out operation names
+        var ops = ['fill_by_opid','fill_by_query','click_on_opid','click_on_query',
+                   'focus_by_opid','touch_all_fields','simple_set_value_by_query',
+                   'delay','fopid','fq','copid','cq','focusopid','mb'];
+        var values = allStrings.filter(function(s) {
+          return ops.indexOf(s) === -1 && s.indexOf('__') !== 0 &&
+                 s !== 'true' && s !== 'false' && s !== 'yes' && s !== 'no';
+        });
+
+        console.log('[1P-shim] Extracted ' + values.length + ' values from cached script');
+        sendResponse({ values: values.length > 0 ? values : null });
+      } catch(e) {
+        console.log('[1P-shim] Parse error:', e);
         sendResponse({ values: null });
       }
     });
-    return true; // Keep channel open for async response
+    return true;
   }
 });
 
