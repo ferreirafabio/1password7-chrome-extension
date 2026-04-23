@@ -142,49 +142,68 @@
     scanForFields(document);
   }
 
-  // Track whether 1Password has filled a field on this page (username step).
-  // When a password field appears dynamically after that, auto-trigger fill.
-  var hasFilled = false;
+  // --- Auto-fill for two-step logins ---
+  // Cache fill values from 1Password fill scripts. When a password field appears
+  // dynamically after username was filled, auto-fill it without opening the popup.
+  var cachedFillValues = [];
   var autoFillTimer = null;
+  var autoFillAttempted = false;
 
-  // Listen for 1Password fill events (the extension adds a class during fill animation)
-  var fillObserver = new MutationObserver(function(mutations) {
-    for (var i = 0; i < mutations.length; i++) {
-      var target = mutations[i].target;
-      if (target.tagName === 'INPUT' && target.classList &&
-          target.classList.contains('com-agilebits-onepassword-extension-animated-fill')) {
-        hasFilled = true;
+  // Listen for fill scripts from the background. Both inline-icon.js and injected.min.js
+  // receive these messages. We extract and cache all fill values.
+  chrome.runtime.onMessage.addListener(function(message) {
+    if (message && (message.name === 'executeFillScript' || message.name === 'legacy_executeFillScript')) {
+      var msg = message.message;
+      if (msg && msg.script) {
+        cachedFillValues = [];
+        autoFillAttempted = false;
+        for (var i = 0; i < msg.script.length; i++) {
+          var entry = msg.script[i];
+          var op, value;
+          if (Array.isArray(entry)) {
+            op = entry[0];
+            value = entry.length >= 3 ? entry[2] : null;
+          } else if (entry && typeof entry === 'object') {
+            op = entry.action || entry.operation || '';
+            value = (entry.values && entry.values[1]) || (entry.parameters && entry.parameters[1]) || null;
+          }
+          if (op && typeof op === 'string' && op.indexOf('fill') === 0 && value && typeof value === 'string') {
+            cachedFillValues.push(value);
+          }
+        }
       }
     }
   });
-  fillObserver.observe(document.documentElement, {
-    attributes: true, attributeFilter: ['class'], subtree: true
-  });
 
-  // Also detect fills by value changes on inputs after a 1Password action
-  document.addEventListener('change', function(e) {
-    if (e.target && e.target.tagName === 'INPUT' &&
-        e.target.getAttribute('data-op-inline-icon')) {
-      hasFilled = true;
+  function autoFillPasswordField(field) {
+    if (autoFillAttempted || cachedFillValues.length === 0) return false;
+
+    // Collect values already visible in text/email inputs (i.e., the username)
+    var usedValues = [];
+    var inputs = document.querySelectorAll('input[type="text"],input[type="email"],input[type="tel"]');
+    for (var i = 0; i < inputs.length; i++) {
+      if (inputs[i].value) usedValues.push(inputs[i].value);
     }
-  }, true);
 
-  function checkForNewPasswordField(root) {
-    if (!root || !root.querySelectorAll) return;
-    var pwFields = root.querySelectorAll('input[type="password"]');
-    for (var i = 0; i < pwFields.length; i++) {
-      var field = pwFields[i];
-      if (!field.value && !field.disabled && !field.readOnly &&
-          field.getBoundingClientRect().height > 0) {
-        // New empty visible password field appeared — replay the cached fill script.
-        // This auto-fills the password without opening the popup again.
-        chrome.runtime.sendMessage({
-          command: 'replay-fill-script',
-          params: { url: window.location.href }
-        });
-        return;
+    // Find a cached value that wasn't used for username — that's the password
+    for (var j = 0; j < cachedFillValues.length; j++) {
+      if (usedValues.indexOf(cachedFillValues[j]) === -1) {
+        autoFillAttempted = true;
+        field.focus();
+        field.value = cachedFillValues[j];
+        field.dispatchEvent(new Event('input', { bubbles: true }));
+        field.dispatchEvent(new Event('change', { bubbles: true }));
+        field.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true }));
+        field.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+        // Add 1Password fill animation for visual feedback
+        field.classList.add('com-agilebits-onepassword-extension-animated-fill');
+        setTimeout(function() {
+          field.classList.remove('com-agilebits-onepassword-extension-animated-fill');
+        }, 300);
+        return true;
       }
     }
+    return false;
   }
 
   // Watch for dynamically added fields (SPAs, lazy-loaded forms)
@@ -212,12 +231,19 @@
       }
     }
 
-    // If a new password field appeared dynamically, auto-trigger fill after a short delay
-    // (debounced to avoid multiple triggers)
-    if (hasNewPasswordField) {
+    // If a new password field appeared dynamically, try auto-fill after a short delay
+    if (hasNewPasswordField && cachedFillValues.length > 0 && !autoFillAttempted) {
       clearTimeout(autoFillTimer);
       autoFillTimer = setTimeout(function() {
-        checkForNewPasswordField(document);
+        var pwFields = document.querySelectorAll('input[type="password"]');
+        for (var k = 0; k < pwFields.length; k++) {
+          var field = pwFields[k];
+          if (!field.value && !field.disabled && !field.readOnly &&
+              field.getBoundingClientRect().height > 0) {
+            autoFillPasswordField(field);
+            break;
+          }
+        }
       }, 500);
     }
   });

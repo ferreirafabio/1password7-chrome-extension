@@ -108,34 +108,13 @@ if (typeof chrome !== 'undefined' && chrome.tabs) {
   });
 }
 
-// Handle inline icon clicks and auto-fill replay BEFORE global.min.js loads its listener.
+// Handle inline icon clicks BEFORE global.min.js loads its own onMessage listener.
 chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
-  if (!message || !sender.tab) return;
-
-  if (message.command === 'inline-icon-clicked') {
-    // Manual click on inline icon — open the 1Password popup
+  if (message && message.command === 'inline-icon-clicked' && sender.tab) {
     if (self._opToolbarHandler) {
       self._opToolbarHandler(sender.tab);
     }
     sendResponse({ success: true });
-    return true;
-  }
-
-  if (message.command === 'replay-fill-script') {
-    // Password field appeared dynamically — replay the last fill script for this tab.
-    // This fills the password without requiring user to select the item again.
-    var tabId = sender.tab.id;
-    var cached = self._lastFillScript[tabId];
-    if (cached) {
-      chrome.tabs.sendMessage(tabId, cached, function() {});
-      sendResponse({ success: true, replayed: true });
-    } else {
-      // No cached fill — fall back to opening the popup
-      if (self._opToolbarHandler) {
-        self._opToolbarHandler(sender.tab);
-      }
-      sendResponse({ success: true, replayed: false });
-    }
     return true;
   }
 });
