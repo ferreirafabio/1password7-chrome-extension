@@ -116,18 +116,36 @@ if (typeof chrome !== 'undefined' && chrome.tabs) {
   });
 }
 
-// Handle inline icon clicks and password extraction BEFORE global.min.js loads its listener.
+// Handle inline icon clicks BEFORE global.min.js loads its listener.
+// If Go & Fill is tracked for this tab, trigger auto-fill instead of showing the popup.
 chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
   if (!message || !sender.tab) return;
 
   if (message.command === 'inline-icon-clicked') {
+    var OP = self.OnePassword;
+    var tabId = sender.tab.id;
+
+    // Check if there's a Go & Fill operation tracked for this tab
+    if (OP && OP.goAndFillOperationForTabReference) {
+      var goFill = OP.goAndFillOperationForTabReference(tabId);
+      if (goFill) {
+        // Go & Fill is active — send checkForGoAndFill to the content script.
+        // injected.min.js will scan for fields, send checkForGoAndFill command to background,
+        // and the background's Go & Fill handler will auto-fill without a popup.
+        console.log('[1P-shim] Go & Fill active for tab ' + tabId + ', triggering auto-fill');
+        chrome.tabs.sendMessage(tabId, { name: 'checkForGoAndFill', message: {} });
+        sendResponse({ success: true });
+        return true;
+      }
+    }
+
+    // No Go & Fill — show popup as usual
     if (self._opToolbarHandler) {
       self._opToolbarHandler(sender.tab);
     }
     sendResponse({ success: true });
     return true;
   }
-
 });
 
 // Import the SJCL crypto library (used by the 1Password background logic)
@@ -151,15 +169,19 @@ importScripts('global.min.js');
     // Log what we receive to understand the data structure
     console.log('[1P-shim] sendExecuteFillScript called, metadata:', JSON.stringify(metadata));
 
-    // Extract item UUID from metadata or fillContextId
+    // Extract item UUID from fillContextId (which is an object like
+    // {itemUUID: "D1139CED...", uuid: "...", profileUUID: "...", isNewPassword: false})
     var itemUUID = null;
     var vaultUUID = '';
-    if (metadata) {
-      itemUUID = metadata.uuid || metadata.itemUUID || metadata.loginUUID || null;
-      vaultUUID = metadata.vaultUUID || '';
-    }
-    if (!itemUUID && fillContextId) {
+    if (fillContextId && typeof fillContextId === 'object') {
+      itemUUID = fillContextId.itemUUID || fillContextId.uuid || null;
+      vaultUUID = fillContextId.profileUUID || '';
+    } else if (fillContextId && typeof fillContextId === 'string') {
       itemUUID = fillContextId;
+    }
+    if (!itemUUID && metadata) {
+      itemUUID = metadata.uuid || metadata.itemUUID || null;
+      vaultUUID = metadata.vaultUUID || metadata.profileUUID || '';
     }
 
     // Set up Go & Fill tracking for this tab
