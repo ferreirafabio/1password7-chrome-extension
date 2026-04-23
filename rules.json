@@ -1,0 +1,20 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "transform": {
+          "queryTransform": {
+            "removeParams": ["onepasswdfill", "onepasswdvault"]
+          }
+        }
+      }
+    },
+    "condition": {
+      "urlFilter": "*://*/*onepasswdfill=*",
+      "resourceTypes": ["main_frame"]
+    }
+  }
+] 
