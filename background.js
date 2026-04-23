@@ -20,18 +20,31 @@ if (typeof chrome !== 'undefined' && chrome.action && !chrome.browserAction) {
   };
 }
 
-// Shim chrome.webRequest to strip 'blocking' from extraInfoSpec (not allowed in MV3).
-// The blocking webRequest for onepasswdfill URLs is replaced by declarativeNetRequest rules.json.
+// Shim chrome.webRequest.onBeforeRequest to replace MV2 blocking mode.
+// In MV2, the listener returned {redirectUrl} to redirect. In MV3, blocking is forbidden.
+// Instead, we run the original callback, check if it returns {redirectUrl}, and perform
+// the redirect via chrome.tabs.update(). This is critical for Go & Fill (two-step logins).
 if (typeof chrome !== 'undefined' && chrome.webRequest) {
   var origOnBeforeRequest = chrome.webRequest.onBeforeRequest;
   if (origOnBeforeRequest) {
     var origWrAddListener = origOnBeforeRequest.addListener.bind(origOnBeforeRequest);
     origOnBeforeRequest.addListener = function(callback, filter, extraInfoSpec) {
-      if (Array.isArray(extraInfoSpec)) {
+      if (Array.isArray(extraInfoSpec) && extraInfoSpec.indexOf('blocking') !== -1) {
+        // Strip 'blocking' but wrap callback to handle redirects manually
         extraInfoSpec = extraInfoSpec.filter(function(s) { return s !== 'blocking'; });
         if (extraInfoSpec.length === 0) extraInfoSpec = undefined;
+
+        var wrappedCallback = function(details) {
+          var result = callback(details);
+          if (result && result.redirectUrl && details.tabId > 0) {
+            chrome.tabs.update(details.tabId, { url: result.redirectUrl });
+          }
+          return result;
+        };
+        origWrAddListener(wrappedCallback, filter, extraInfoSpec);
+      } else {
+        origWrAddListener(callback, filter, extraInfoSpec);
       }
-      origWrAddListener(callback, filter, extraInfoSpec);
     };
   }
 }
