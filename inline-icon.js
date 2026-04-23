@@ -176,9 +176,10 @@
       var field = pwFields[i];
       if (!field.value && !field.disabled && !field.readOnly &&
           field.getBoundingClientRect().height > 0) {
-        // New empty visible password field appeared — trigger 1Password fill
+        // New empty visible password field appeared — replay the cached fill script.
+        // This auto-fills the password without opening the popup again.
         chrome.runtime.sendMessage({
-          command: 'inline-icon-clicked',
+          command: 'replay-fill-script',
           params: { url: window.location.href }
         });
         return;

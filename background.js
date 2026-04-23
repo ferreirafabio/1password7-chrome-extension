@@ -76,10 +76,18 @@ if (typeof chrome !== 'undefined' && chrome.contextMenus) {
   });
 }
 
-// Suppress "Receiving end does not exist" errors from tabs.sendMessage.
+// Cache fill scripts per tab and suppress "Receiving end does not exist" errors.
+// When 1Password sends a fill script to a tab, we cache it so we can replay it
+// when a password field appears dynamically (two-step login flows).
+self._lastFillScript = {};
 if (typeof chrome !== 'undefined' && chrome.tabs) {
   var origTabsSendMessage = chrome.tabs.sendMessage.bind(chrome.tabs);
   chrome.tabs.sendMessage = function(tabId, message, optionsOrCallback, callback) {
+    // Cache executeFillScript messages per tab for replay
+    if (message && (message.name === 'executeFillScript' || message.name === 'legacy_executeFillScript')) {
+      self._lastFillScript[tabId] = message;
+    }
+
     if (typeof optionsOrCallback === 'function') {
       callback = optionsOrCallback;
       optionsOrCallback = undefined;
@@ -93,17 +101,42 @@ if (typeof chrome !== 'undefined' && chrome.tabs) {
     }
     return origTabsSendMessage(tabId, message, wrappedCallback);
   };
+
+  // Clean up cache when tabs are closed
+  chrome.tabs.onRemoved.addListener(function(tabId) {
+    delete self._lastFillScript[tabId];
+  });
 }
 
-// Handle inline icon clicks BEFORE global.min.js loads its own onMessage listener.
-// global.min.js catches all messages with a 'command' field, so we intercept first.
+// Handle inline icon clicks and auto-fill replay BEFORE global.min.js loads its listener.
 chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
-  if (message && message.command === 'inline-icon-clicked' && sender.tab) {
+  if (!message || !sender.tab) return;
+
+  if (message.command === 'inline-icon-clicked') {
+    // Manual click on inline icon — open the 1Password popup
     if (self._opToolbarHandler) {
       self._opToolbarHandler(sender.tab);
     }
     sendResponse({ success: true });
-    return true; // Prevent propagation to global.min.js listener
+    return true;
+  }
+
+  if (message.command === 'replay-fill-script') {
+    // Password field appeared dynamically — replay the last fill script for this tab.
+    // This fills the password without requiring user to select the item again.
+    var tabId = sender.tab.id;
+    var cached = self._lastFillScript[tabId];
+    if (cached) {
+      chrome.tabs.sendMessage(tabId, cached, function() {});
+      sendResponse({ success: true, replayed: true });
+    } else {
+      // No cached fill — fall back to opening the popup
+      if (self._opToolbarHandler) {
+        self._opToolbarHandler(sender.tab);
+      }
+      sendResponse({ success: true, replayed: false });
+    }
+    return true;
   }
 });
 
