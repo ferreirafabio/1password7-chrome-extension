@@ -175,10 +175,9 @@
   function autoFillPasswordField(field) {
     if (autoFillAttempted) return;
     autoFillAttempted = true;
-    // The Go & Fill mechanism in 1Password works via the toolbar button handler.
-    // When Go & Fill is tracked for a tab, clicking the toolbar button auto-fills
-    // without showing the popup. Trigger it.
-    chrome.runtime.sendMessage({ command: 'inline-icon-clicked', params: { url: window.location.href } });
+    // Send auto-fill-password (not inline-icon-clicked) so the background
+    // checks Go & Fill first and auto-fills without showing the popup.
+    chrome.runtime.sendMessage({ command: 'auto-fill-password', params: { url: window.location.href } });
   }
 
   // Watch for dynamically added fields (SPAs, lazy-loaded forms)

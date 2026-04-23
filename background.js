@@ -116,22 +116,27 @@ if (typeof chrome !== 'undefined' && chrome.tabs) {
   });
 }
 
-// Handle inline icon clicks BEFORE global.min.js loads its listener.
-// If Go & Fill is tracked for this tab, trigger auto-fill instead of showing the popup.
+// Handle inline icon clicks and auto-fill triggers BEFORE global.min.js loads its listener.
 chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
   if (!message || !sender.tab) return;
 
+  // Manual click on inline icon — always show popup
   if (message.command === 'inline-icon-clicked') {
+    if (self._opToolbarHandler) {
+      self._opToolbarHandler(sender.tab);
+    }
+    sendResponse({ success: true });
+    return true;
+  }
+
+  // Auto-trigger when password field appears dynamically — try Go & Fill first
+  if (message.command === 'auto-fill-password') {
     var OP = self.OnePassword;
     var tabId = sender.tab.id;
 
-    // Check if there's a Go & Fill operation tracked for this tab
     if (OP && OP.goAndFillOperationForTabReference) {
       var goFill = OP.goAndFillOperationForTabReference(tabId);
       if (goFill) {
-        // Go & Fill is active — send checkForGoAndFill to the content script.
-        // injected.min.js will scan for fields, send checkForGoAndFill command to background,
-        // and the background's Go & Fill handler will auto-fill without a popup.
         console.log('[1P-shim] Go & Fill active for tab ' + tabId + ', triggering auto-fill');
         chrome.tabs.sendMessage(tabId, { name: 'checkForGoAndFill', message: {} });
         sendResponse({ success: true });
@@ -139,7 +144,7 @@ chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
       }
     }
 
-    // No Go & Fill — show popup as usual
+    // No Go & Fill — fall back to showing popup
     if (self._opToolbarHandler) {
       self._opToolbarHandler(sender.tab);
     }
