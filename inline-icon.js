@@ -135,11 +135,32 @@
     }
   }
 
+  // Check for empty password fields and try auto-fill from background cache.
+  // This handles full page navigations (e.g., username form submits to a new page
+  // that has the password field already in the DOM on load).
+  function tryAutoFillOnLoad() {
+    if (autoFillAttempted) return;
+    var pwFields = document.querySelectorAll('input[type="password"]');
+    for (var i = 0; i < pwFields.length; i++) {
+      var field = pwFields[i];
+      if (!field.value && !field.disabled && !field.readOnly &&
+          field.getBoundingClientRect().height > 0) {
+        autoFillPasswordField(field);
+        return;
+      }
+    }
+  }
+
   // Initial scan
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', function() { scanForFields(document); });
+    document.addEventListener('DOMContentLoaded', function() {
+      scanForFields(document);
+      // Delay auto-fill check to let the page settle
+      setTimeout(tryAutoFillOnLoad, 800);
+    });
   } else {
     scanForFields(document);
+    setTimeout(tryAutoFillOnLoad, 800);
   }
 
   // --- Auto-fill for two-step logins ---
