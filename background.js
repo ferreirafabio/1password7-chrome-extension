@@ -76,16 +76,51 @@ if (typeof chrome !== 'undefined' && chrome.contextMenus) {
   });
 }
 
-// Cache fill scripts per tab and suppress "Receiving end does not exist" errors.
-// When 1Password sends a fill script to a tab, we cache it so we can replay it
-// when a password field appears dynamically (two-step login flows).
+// Cache fill script values per tab and suppress "Receiving end does not exist" errors.
+// Extract ALL string values from fill scripts so we can auto-fill password fields
+// that appear dynamically in two-step login flows.
 self._lastFillScript = {};
 if (typeof chrome !== 'undefined' && chrome.tabs) {
+  // Recursively extract all string values from any data structure
+  function extractStrings(obj, results) {
+    if (!obj) return;
+    if (typeof obj === 'string' && obj.length > 0 && obj.length < 500) {
+      results.push(obj);
+    } else if (Array.isArray(obj)) {
+      for (var i = 0; i < obj.length; i++) extractStrings(obj[i], results);
+    } else if (typeof obj === 'object') {
+      var keys = Object.keys(obj);
+      for (var j = 0; j < keys.length; j++) extractStrings(obj[keys[j]], results);
+    }
+  }
+
   var origTabsSendMessage = chrome.tabs.sendMessage.bind(chrome.tabs);
   chrome.tabs.sendMessage = function(tabId, message, optionsOrCallback, callback) {
-    // Cache executeFillScript messages per tab for replay
+    // Cache fill script values per tab
     if (message && (message.name === 'executeFillScript' || message.name === 'legacy_executeFillScript')) {
-      self._lastFillScript[tabId] = message;
+      var msg = message.message;
+      if (msg && msg.script) {
+        // Extract all string values from the script entries
+        var allValues = [];
+        extractStrings(msg.script, allValues);
+        // Filter out operation names and common non-value strings
+        var ops = ['fill_by_opid','fill_by_query','click_on_opid','click_on_query',
+                   'focus_by_opid','touch_all_fields','simple_set_value_by_query',
+                   'delay','fopid','fq','copid','cq','focusopid','mb',
+                   'fill_by_opid_and_submit'];
+        var filtered = [];
+        for (var i = 0; i < allValues.length; i++) {
+          var v = allValues[i];
+          if (ops.indexOf(v) === -1 && v.indexOf('__') !== 0 && v !== 'true' && v !== 'false') {
+            filtered.push(v);
+          }
+        }
+        self._lastFillScript[tabId] = filtered;
+        // Persist across service worker restarts
+        var storageObj = {};
+        storageObj['fill_' + tabId] = filtered;
+        chrome.storage.session.set(storageObj);
+      }
     }
 
     if (typeof optionsOrCallback === 'function') {
@@ -105,6 +140,7 @@ if (typeof chrome !== 'undefined' && chrome.tabs) {
   // Clean up cache when tabs are closed
   chrome.tabs.onRemoved.addListener(function(tabId) {
     delete self._lastFillScript[tabId];
+    chrome.storage.session.remove('fill_' + tabId);
   });
 }
 
@@ -121,82 +157,25 @@ chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
   }
 
   if (message.command === 'get-cached-password') {
-    // Content script is asking for the cached password value for this tab.
+    // Content script is asking for cached fill values for this tab.
     var tabId = sender.tab.id;
     var cached = self._lastFillScript[tabId];
-    var password = null;
 
-    if (cached && cached.message) {
-      var msg = cached.message;
-      var script = msg.script;
-      var props = msg.properties;
-
-      // Try to find the password value from the fill script.
-      // Method 1: Use properties to identify password fields, then get their values from script
-      if (props && script) {
-        // props contains field metadata keyed by opid
-        var passwordOpids = [];
-        var keys = Object.keys(props);
-        for (var i = 0; i < keys.length; i++) {
-          var field = props[keys[i]];
-          if (field && (field.type === 'password' ||
-              (field.htmlInputType && field.htmlInputType === 'password') ||
-              (field.designationType && field.designationType === 'password'))) {
-            passwordOpids.push(keys[i]);
-          }
-        }
-
-        // Now find the value for these opids in the script
-        for (var j = 0; j < script.length; j++) {
-          var entry = script[j];
-          var op, target, value;
-          if (Array.isArray(entry)) {
-            op = entry[0]; target = entry[1]; value = entry[2];
-          } else if (entry && typeof entry === 'object') {
-            op = entry.action || entry.operation || '';
-            var vals = entry.values || entry.parameters || [];
-            target = vals[0]; value = vals[1];
-          }
-          if (value && typeof value === 'string' && op && typeof op === 'string' && op.indexOf('fill') === 0) {
-            if (passwordOpids.length > 0 && passwordOpids.indexOf(target) !== -1) {
-              password = value;
-              break;
-            }
-          }
-        }
-      }
-
-      // Method 2: If no password found via properties, use heuristic —
-      // collect all fill values and pick the one not matching any visible input
-      if (!password && script) {
-        var allValues = [];
-        for (var k = 0; k < script.length; k++) {
-          var e = script[k];
-          var v;
-          if (Array.isArray(e)) {
-            v = e.length >= 3 ? e[2] : null;
-            if (v && typeof v === 'string' && e[0] && typeof e[0] === 'string' && e[0].indexOf('fill') === 0) {
-              allValues.push(v);
-            }
-          } else if (e && typeof e === 'object') {
-            var vs = e.values || e.parameters || [];
-            v = vs[1];
-            var o = e.action || e.operation || '';
-            if (v && typeof v === 'string' && o.indexOf('fill') === 0) {
-              allValues.push(v);
-            }
-          }
-        }
-        // Send all values — content script will determine which is the password
-        if (allValues.length > 0) {
-          sendResponse({ values: allValues });
-          return true;
-        }
-      }
+    if (cached && cached.length > 0) {
+      sendResponse({ values: cached });
+      return true;
     }
 
-    sendResponse({ password: password, values: null });
-    return true;
+    // Service worker may have restarted — check persistent storage
+    chrome.storage.session.get('fill_' + tabId, function(result) {
+      var stored = result['fill_' + tabId];
+      if (stored && stored.length > 0) {
+        sendResponse({ values: stored });
+      } else {
+        sendResponse({ values: null });
+      }
+    });
+    return true; // Keep channel open for async response
   }
 });
 

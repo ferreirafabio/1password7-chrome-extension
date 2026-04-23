@@ -187,35 +187,36 @@
     if (autoFillAttempted) return;
     autoFillAttempted = true;
 
-    // Ask the background for the cached password value
+    // Ask the background for cached fill values
     chrome.runtime.sendMessage(
       { command: 'get-cached-password', params: { url: window.location.href } },
       function(response) {
-        if (chrome.runtime.lastError) return;
-        if (!response) return;
+        if (chrome.runtime.lastError || !response || !response.values || response.values.length === 0) {
+          // No cached values — fall back to opening popup
+          autoFillAttempted = false;
+          chrome.runtime.sendMessage({ command: 'inline-icon-clicked', params: { url: window.location.href } });
+          return;
+        }
 
-        if (response.password) {
-          // Direct password match from field properties
-          fillField(field, response.password);
-        } else if (response.values && response.values.length > 0) {
-          // Heuristic: find the value not already in any visible input
-          var usedValues = [];
-          var inputs = document.querySelectorAll('input[type="text"],input[type="email"],input[type="tel"]');
-          for (var i = 0; i < inputs.length; i++) {
-            if (inputs[i].value) usedValues.push(inputs[i].value);
+        // Collect values already visible in text/email inputs (i.e., the username)
+        var usedValues = [];
+        var inputs = document.querySelectorAll('input[type="text"],input[type="email"],input[type="tel"]');
+        for (var i = 0; i < inputs.length; i++) {
+          if (inputs[i].value) usedValues.push(inputs[i].value);
+        }
+
+        // Find a value that wasn't used for username — that's the password
+        for (var j = 0; j < response.values.length; j++) {
+          if (usedValues.indexOf(response.values[j]) === -1) {
+            fillField(field, response.values[j]);
+            return;
           }
-          for (var j = 0; j < response.values.length; j++) {
-            if (usedValues.indexOf(response.values[j]) === -1) {
-              fillField(field, response.values[j]);
-              return;
-            }
-          }
-          // If all values matched visible fields, use the last one (likely password)
-          if (response.values.length > 1) {
-            fillField(field, response.values[response.values.length - 1]);
-          }
+        }
+
+        // All values match visible fields — try the last one as password
+        if (response.values.length > 1) {
+          fillField(field, response.values[response.values.length - 1]);
         } else {
-          // No cached password — fall back to opening popup
           autoFillAttempted = false;
           chrome.runtime.sendMessage({ command: 'inline-icon-clicked', params: { url: window.location.href } });
         }
