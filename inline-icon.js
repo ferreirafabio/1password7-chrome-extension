@@ -1,17 +1,15 @@
 // Inline 1Password icon for password and login fields
-// Adds a clickable 1Password icon inside input fields, similar to Safari's integration
+// Adds a clickable 1Password icon inside input fields that triggers the toolbar fill action
 
 (function() {
   'use strict';
 
-  const ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
-    <rect width="24" height="24" rx="6" fill="#1A8CFF"/>
-    <text x="12" y="17" text-anchor="middle" font-family="Arial, sans-serif" font-weight="bold" font-size="14" fill="white">1</text>
-  </svg>`;
-
-  const ICON_SIZE = 22;
-  const ICON_MARGIN = 4;
+  const ICON_SIZE = 20;
+  const ICON_MARGIN = 6;
   const PROCESSED_ATTR = 'data-op-inline-icon';
+
+  // Use the extension's own icon
+  const ICON_URL = chrome.runtime.getURL('assets/Icon-16.png');
 
   function createIcon(inputEl) {
     if (inputEl.getAttribute(PROCESSED_ATTR)) return;
@@ -21,56 +19,82 @@
     const rect = inputEl.getBoundingClientRect();
     if (rect.width < 80 || rect.height < 20) return;
     if (inputEl.readOnly || inputEl.disabled) return;
+    if (window.getComputedStyle(inputEl).visibility === 'hidden') return;
+    if (window.getComputedStyle(inputEl).display === 'none') return;
 
-    // Create wrapper if input isn't already in a positioned container
-    const wrapper = document.createElement('div');
-    wrapper.className = 'op-inline-wrapper';
-    wrapper.style.cssText = 'position:relative;display:inline-block;width:' +
-      (inputEl.offsetWidth ? inputEl.offsetWidth + 'px' : '100%') + ';';
-
-    const icon = document.createElement('div');
+    const icon = document.createElement('img');
+    icon.src = ICON_URL;
     icon.className = 'op-inline-icon';
-    icon.innerHTML = ICON_SVG;
     icon.title = '1Password – Fill login';
+    icon.setAttribute('tabindex', '-1');
+
+    // Position the icon inside the input field using absolute positioning
     icon.style.cssText = [
       'position:absolute',
-      'right:' + ICON_MARGIN + 'px',
-      'top:50%',
-      'transform:translateY(-50%)',
       'width:' + ICON_SIZE + 'px',
       'height:' + ICON_SIZE + 'px',
       'cursor:pointer',
       'z-index:2147483647',
-      'opacity:0.7',
+      'opacity:0.65',
       'transition:opacity 0.15s',
       'pointer-events:auto',
-      'border-radius:4px',
-      'display:flex',
-      'align-items:center',
-      'justify-content:center',
+      'padding:0',
+      'margin:0',
+      'border:none',
+      'background:none',
+      'box-shadow:none',
+      'outline:none',
     ].join(';') + ';';
 
     icon.addEventListener('mouseenter', function() { icon.style.opacity = '1'; });
-    icon.addEventListener('mouseleave', function() { icon.style.opacity = '0.7'; });
+    icon.addEventListener('mouseleave', function() { icon.style.opacity = '0.65'; });
+
+    icon.addEventListener('mousedown', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+    }, true);
 
     icon.addEventListener('click', function(e) {
       e.preventDefault();
       e.stopPropagation();
-      // Send message to background to trigger 1Password fill
-      chrome.runtime.sendMessage({ command: 'fillItem', params: { url: window.location.href } });
-    });
+      e.stopImmediatePropagation();
+      // Tell the background to trigger the same action as clicking the toolbar button
+      chrome.runtime.sendMessage({ command: 'inline-icon-clicked', params: { url: window.location.href } });
+      return false;
+    }, true);
 
-    // Insert wrapper around input
+    // Add padding to input so text doesn't overlap the icon
+    const currentPadding = parseInt(window.getComputedStyle(inputEl).paddingRight) || 0;
+    inputEl.style.paddingRight = Math.max(currentPadding, ICON_SIZE + ICON_MARGIN * 2 + 2) + 'px';
+
+    // Position the icon relative to the input
     const parent = inputEl.parentNode;
-    if (parent) {
-      parent.insertBefore(wrapper, inputEl);
-      wrapper.appendChild(inputEl);
-      wrapper.appendChild(icon);
+    if (!parent) return;
 
-      // Adjust input padding so text doesn't overlap the icon
-      const currentPadding = parseInt(window.getComputedStyle(inputEl).paddingRight) || 0;
-      inputEl.style.paddingRight = Math.max(currentPadding, ICON_SIZE + ICON_MARGIN * 2 + 4) + 'px';
+    // Make parent relative if it isn't already positioned
+    const parentPosition = window.getComputedStyle(parent).position;
+    if (parentPosition === 'static') {
+      parent.style.position = 'relative';
     }
+
+    parent.insertBefore(icon, inputEl.nextSibling);
+    positionIcon(inputEl, icon);
+
+    // Reposition on window resize
+    let resizeTimer;
+    window.addEventListener('resize', function() {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(function() { positionIcon(inputEl, icon); }, 100);
+    });
+  }
+
+  function positionIcon(inputEl, icon) {
+    const inputRect = inputEl.getBoundingClientRect();
+    const parentRect = inputEl.parentNode.getBoundingClientRect();
+
+    icon.style.top = (inputEl.offsetTop + (inputEl.offsetHeight - ICON_SIZE) / 2) + 'px';
+    icon.style.left = (inputEl.offsetLeft + inputEl.offsetWidth - ICON_SIZE - ICON_MARGIN) + 'px';
   }
 
   function isLoginField(el) {
@@ -101,13 +125,14 @@
 
   function scanForFields(root) {
     if (!root || !root.querySelectorAll) return;
-    const inputs = root.querySelectorAll('input:not([' + PROCESSED_ATTR + '])');
-    inputs.forEach(function(input) {
-      if (isLoginField(input)) {
-        // Delay slightly to ensure the input is fully rendered
-        setTimeout(function() { createIcon(input); }, 100);
+    var inputs = root.querySelectorAll('input:not([' + PROCESSED_ATTR + '])');
+    for (var i = 0; i < inputs.length; i++) {
+      if (isLoginField(inputs[i])) {
+        (function(input) {
+          setTimeout(function() { createIcon(input); }, 150);
+        })(inputs[i]);
       }
-    });
+    }
   }
 
   // Initial scan
@@ -118,14 +143,14 @@
   }
 
   // Watch for dynamically added fields (SPAs, lazy-loaded forms)
-  const observer = new MutationObserver(function(mutations) {
-    for (let i = 0; i < mutations.length; i++) {
-      const mutation = mutations[i];
-      for (let j = 0; j < mutation.addedNodes.length; j++) {
-        const node = mutation.addedNodes[j];
+  var observer = new MutationObserver(function(mutations) {
+    for (var i = 0; i < mutations.length; i++) {
+      var added = mutations[i].addedNodes;
+      for (var j = 0; j < added.length; j++) {
+        var node = added[j];
         if (node.nodeType === 1) {
           if (node.tagName === 'INPUT' && isLoginField(node)) {
-            setTimeout(function() { createIcon(node); }, 100);
+            (function(n) { setTimeout(function() { createIcon(n); }, 150); })(node);
           } else {
             scanForFields(node);
           }
