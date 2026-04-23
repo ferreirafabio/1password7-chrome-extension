@@ -136,58 +136,66 @@ importScripts('ext/sjcl.js');
 // Import the original 1Password background logic
 importScripts('global.min.js');
 
-// After global.min.js loads, hook into the fill process to enable auto Go & Fill.
-// When the user selects a login from the popup, 1Password fills whatever fields exist.
-// If the password field doesn't exist yet (two-step login), we set up a Go & Fill
-// operation so when the password page loads, 1Password auto-fills without a popup.
+// After global.min.js loads, hook into sendExecuteFillScript to enable Go & Fill.
+// The fill path is: native app → AgentHandlers.executeFillScript → r.Ub (sendExecuteFillScript)
+// → chrome.tabs.sendMessage. We hook sendExecuteFillScript to capture the item UUID
+// and set up Go & Fill tracking for two-step logins.
 (function() {
   var OP = self.OnePassword;
-  if (!OP) return;
+  if (!OP || !OP.sendExecuteFillScript) return;
 
-  // Find the fillItem function and override ALL aliases (internal code uses r.Oa,
-  // not r.fillItem, so we must override every property pointing to the same function).
-  var origFillItem = OP.fillItem;
-  if (!origFillItem) return;
+  var origSendFill = OP.sendExecuteFillScript;
 
-  var hookedFillItem = function(action, login, options) {
-    if (action === 'fillLogin' && login) {
+  var hookedSendFill = function(httpsCheck, documentUUID, allowedDomains, fillContextId,
+                                 script, properties, options, autosubmit, metadata, callback) {
+    // Log what we receive to understand the data structure
+    console.log('[1P-shim] sendExecuteFillScript called, metadata:', JSON.stringify(metadata));
+
+    // Extract item UUID from metadata or fillContextId
+    var itemUUID = null;
+    var vaultUUID = '';
+    if (metadata) {
+      itemUUID = metadata.uuid || metadata.itemUUID || metadata.loginUUID || null;
+      vaultUUID = metadata.vaultUUID || '';
+    }
+    if (!itemUUID && fillContextId) {
+      itemUUID = fillContextId;
+    }
+
+    // Set up Go & Fill tracking for this tab
+    if (itemUUID && OP.trackGoAndFillOperationForTabReference) {
       chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
-        if (tabs && tabs[0] && OP.trackGoAndFillOperationForTabReference) {
+        if (tabs && tabs[0]) {
           var tabRef = tabs[0].id;
-          var itemUUID = login.uuid || login.itemUUID;
-          var vaultUUID = login.vaultUUID || '';
           var url = tabs[0].url || '';
           var nakedDomains = null;
           if (OP.URLTools && OP.URLTools.L) {
             var nd = OP.URLTools.L(url);
             if (nd) nakedDomains = [nd];
           }
-
-          if (itemUUID) {
-            OP.trackGoAndFillOperationForTabReference({
-              itemUUID: itemUUID,
-              vaultUUID: vaultUUID,
-              url: url,
-              nakedDomains: nakedDomains,
-              uuid: itemUUID,
-              context: null,
-              scheduledAt: (new Date()).getTime()
-            }, tabRef);
-            console.log('[1P-shim] Go & Fill tracked: item=' + itemUUID + ' tab=' + tabRef);
-          }
+          OP.trackGoAndFillOperationForTabReference({
+            itemUUID: itemUUID,
+            vaultUUID: vaultUUID,
+            url: url,
+            nakedDomains: nakedDomains,
+            uuid: itemUUID,
+            context: null,
+            scheduledAt: (new Date()).getTime()
+          }, tabRef);
+          console.log('[1P-shim] Go & Fill tracked: item=' + itemUUID + ' tab=' + tabRef);
         }
       });
     }
-    return origFillItem.apply(this, arguments);
+
+    return origSendFill.apply(this, arguments);
   };
 
-  // Override ALL properties that point to the original fillItem function.
-  // This ensures internal calls (this.Oa) use our hooked version too.
+  // Override ALL properties pointing to the original function
   var keys = Object.keys(OP);
   for (var i = 0; i < keys.length; i++) {
-    if (OP[keys[i]] === origFillItem) {
-      OP[keys[i]] = hookedFillItem;
+    if (OP[keys[i]] === origSendFill) {
+      OP[keys[i]] = hookedSendFill;
     }
   }
-  console.log('[1P-shim] fillItem hook installed');
+  console.log('[1P-shim] sendExecuteFillScript hook installed');
 })();
