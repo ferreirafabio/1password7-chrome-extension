@@ -4,6 +4,8 @@ A working Chrome extension for **1Password 7 standalone** (lifetime/one-time lic
 
 Google Chrome dropped support for Manifest V2 extensions, which broke the original 1Password 7 browser extension. 1Password (AgileBits) officially retired the classic extension and only supports 1Password 8 (subscription-based). This project brings it back for users with standalone licenses.
 
+![Inline 1Password icon in login fields](assets/screenshot-inline.png)
+
 ## Features
 
 - Full autofill support via native messaging to the 1Password 7 desktop app
