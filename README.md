@@ -4,8 +4,6 @@ A working Chrome extension for **1Password 7 standalone** (lifetime/one-time lic
 
 AgileBits deprecated and removed the original 1Password 7 Chrome extension, forcing users toward 1Password 8 (subscription-only). If you have a standalone/lifetime license, you were left without a working Chrome extension. This project brings it back.
 
-![Inline 1Password icon in login fields](assets/screenshot-inline.png)
-
 ## Features
 
 - Full autofill support via native messaging to the 1Password 7 desktop app
@@ -14,6 +12,10 @@ AgileBits deprecated and removed the original 1Password 7 Chrome extension, forc
 - Toolbar button, keyboard shortcut (Cmd+\ / Ctrl+\), and right-click context menu
 - Works with vaults stored locally or synced via Dropbox/iCloud
 - Manifest V3 compatible (works with current Chrome versions)
+
+### Inline icon
+
+![Inline 1Password icon in login fields](assets/screenshot-inline.png)
 
 ## Requirements
 
